@@ -58,3 +58,4 @@ if (require.main === module) {
 }
 
 module.exports = app;
+// v1.0.1 - Minor update
