@@ -55,14 +55,11 @@ jobs:
     - name: 🔐 Security scan
       id: security
       run: |
-        # Detect vulnerabilities based on branch
         if [[ "${{ github.ref }}" == *"risky-deployment"* ]]; then
-          # Risky branch has vulnerabilities
           CRITICAL=2
           HIGH=5
           echo "⚠️ Security issues detected!"
         else
-          # Main branch is clean
           CRITICAL=0
           HIGH=0
         fi
@@ -73,15 +70,18 @@ jobs:
     - name: 📊 Calculate pipeline metrics
       id: metrics
       run: |
-        if [ "${{ steps.test.outputs.total }}" -gt 0 ]; then
-          PASS_RATE=$(echo "scale=2; ${{ steps.test.outputs.passed }} / ${{ steps.test.outputs.total }}" | bc)
+        TOTAL=${{ steps.test.outputs.total }}
+        PASSED=${{ steps.test.outputs.passed }}
+        
+        if [ "$TOTAL" -gt 0 ]; then
+          # Use awk to ensure proper decimal format (0.33 not .33)
+          PASS_RATE=$(awk "BEGIN {printf \"%.2f\", $PASSED / $TOTAL}")
         else
-          PASS_RATE=0.33
+          PASS_RATE="0.33"
         fi
         
         CODE_CHANGES=$(git diff --stat HEAD~1 2>/dev/null | tail -1 | grep -oP '\d+' | head -1 || echo "50")
         
-        # Risky branch has large changes
         if [[ "${{ github.ref }}" == *"risky-deployment"* ]]; then
           CODE_CHANGES=450
         fi
@@ -100,36 +100,62 @@ jobs:
         
         TOTAL_DURATION=$((${{ steps.install.outputs.duration }} + ${{ steps.test.outputs.duration }}))
         
-        # Risky deployments have longer duration
         if [[ "${{ github.ref }}" == *"risky-deployment"* ]]; then
           TOTAL_DURATION=1200
+          CPU_USAGE=85.0
+          MEMORY_USAGE=6000.0
+          STAGE_COUNT=15
+          COVERAGE=55.0
+          EXEC_HOUR=22
+          EXEC_DAY=5
+          PREV_FAILURE=0.35
+        else
+          CPU_USAGE=45.0
+          MEMORY_USAGE=2000.0
+          STAGE_COUNT=5
+          COVERAGE=80.0
+          EXEC_HOUR=$(date +%H)
+          EXEC_DAY=$(date +%w)
+          PREV_FAILURE=0.05
         fi
         
-        DAY_OF_WEEK=$(date +%w)
+        PASS_RATE="${{ steps.metrics.outputs.pass_rate }}"
+        CODE_CHANGES=${{ steps.metrics.outputs.code_changes }}
+        VULN_CRIT=${{ steps.security.outputs.critical }}
+        VULN_HIGH=${{ steps.security.outputs.high }}
         
         echo "Pipeline Metrics:"
         echo "- Duration: $TOTAL_DURATION seconds"
-        echo "- Test Pass Rate: ${{ steps.metrics.outputs.pass_rate }}"
-        echo "- Code Changes: ${{ steps.metrics.outputs.code_changes }} lines"
-        echo "- Critical Vulns: ${{ steps.security.outputs.critical }}"
-        echo "- High Vulns: ${{ steps.security.outputs.high }}"
+        echo "- Test Pass Rate: $PASS_RATE"
+        echo "- Code Changes: $CODE_CHANGES lines"
+        echo "- Critical Vulns: $VULN_CRIT"
+        echo "- High Vulns: $VULN_HIGH"
+        
+        # Create JSON file to avoid shell escaping issues
+        cat > payload.json <<EOF
+{
+  "execution_duration_sec": $TOTAL_DURATION,
+  "test_pass_rate": $PASS_RATE,
+  "code_change_volume": $CODE_CHANGES,
+  "cpu_usage_avg": $CPU_USAGE,
+  "memory_usage_avg": $MEMORY_USAGE,
+  "vuln_critical": $VULN_CRIT,
+  "vuln_high": $VULN_HIGH,
+  "stage_count": $STAGE_COUNT,
+  "test_coverage_pct": $COVERAGE,
+  "execution_hour": $EXEC_HOUR,
+  "execution_day_of_week": $EXEC_DAY,
+  "previous_failure_rate": $PREV_FAILURE
+}
+EOF
+        
+        echo ""
+        echo "Request Payload:"
+        cat payload.json | jq '.'
         
         RESPONSE=$(curl -s -X POST ${ML_API_URL}/health/score \
           -H "Content-Type: application/json" \
-          -d "{
-            \"execution_duration_sec\": $TOTAL_DURATION,
-            \"test_pass_rate\": ${{ steps.metrics.outputs.pass_rate }},
-            \"code_change_volume\": ${{ steps.metrics.outputs.code_changes }},
-            \"cpu_usage_avg\": 85.0,
-            \"memory_usage_avg\": 6000.0,
-            \"vuln_critical\": ${{ steps.security.outputs.critical }},
-            \"vuln_high\": ${{ steps.security.outputs.high }},
-            \"stage_count\": 15,
-            \"test_coverage_pct\": 55.0,
-            \"execution_hour\": 22,
-            \"execution_day_of_week\": 5,
-            \"previous_failure_rate\": 0.35
-          }")
+          -d @payload.json)
         
         echo ""
         echo "ML API Response:"
@@ -141,6 +167,7 @@ jobs:
         
         if [ -z "$HEALTH_SCORE" ]; then
           echo "::error::Failed to get valid response from ML API"
+          echo "Raw response: $RESPONSE"
           exit 1
         fi
         
@@ -154,7 +181,7 @@ jobs:
           echo "| Metric | Value |"
           echo "|--------|-------|"
           echo "| **Health Score** | **$HEALTH_SCORE/100** |"
-          echo "| **Status** | **$STATUS** ⚠️ |"
+          echo "| **Status** | **$STATUS** |"
           echo "| **Recommendation** | $ACTION |"
           echo ""
         } >> $GITHUB_STEP_SUMMARY
@@ -168,44 +195,46 @@ jobs:
           echo ""
           echo "| Component | Score |"
           echo "|-----------|-------|"
-          echo "| Failure Risk | $FAILURE_RISK ⚠️ |"
+          echo "| Failure Risk | $FAILURE_RISK |"
           echo "| Anomaly Detection | $ANOMALY_SCORE |"
-          echo "| Policy Compliance | $POLICY_SCORE ⚠️ |"
-          echo ""
-          echo "### ⚠️ Issues Detected"
-          echo ""
-          echo "- ❌ **Tests failing**: ${{ steps.test.outputs.passed }}/${{ steps.test.outputs.total }} passed"
-          echo "- ❌ **Critical vulnerabilities**: ${{ steps.security.outputs.critical }}"
-          echo "- ❌ **High vulnerabilities**: ${{ steps.security.outputs.high }}"
-          echo "- ❌ **Large code changes**: ${{ steps.metrics.outputs.code_changes }} lines"
+          echo "| Policy Compliance | $POLICY_SCORE |"
           echo ""
         } >> $GITHUB_STEP_SUMMARY
+        
+        if [[ "${{ github.ref }}" == *"risky-deployment"* ]]; then
+          {
+            echo "### ⚠️ Issues Detected"
+            echo ""
+            echo "- ❌ **Tests failing**: ${{ steps.test.outputs.passed }}/${{ steps.test.outputs.total }} passed"
+            echo "- ❌ **Critical vulnerabilities**: $VULN_CRIT"
+            echo "- ❌ **High vulnerabilities**: $VULN_HIGH"
+            echo "- ❌ **Large code changes**: $CODE_CHANGES lines"
+            echo ""
+          } >> $GITHUB_STEP_SUMMARY
+        fi
         
         if [ "$STATUS" = "CRITICAL" ] || [ "$STATUS" = "DEGRADED" ]; then
           {
             echo "## ❌ **DEPLOYMENT BLOCKED BY ML QUALITY GATE**"
             echo ""
-            echo "### Why was this blocked?"
-            echo ""
-            echo "The ML model analyzed your pipeline and determined that deploying this code"
-            echo "would have a **${FAILURE_RISK}% probability of causing production issues**."
+            echo "The ML model determined this deployment is too risky."
             echo ""
             echo "**Health Score**: $HEALTH_SCORE/100 (threshold: 50)"
+            echo "**Failure Risk**: $(echo "100 - $FAILURE_RISK" | bc)% probability of failure"
             echo ""
-            echo "### What should you do?"
-            echo ""
-            echo "1. Fix failing tests"
-            echo "2. Address security vulnerabilities"
-            echo "3. Review large code changes"
-            echo "4. Run tests locally before pushing"
+            echo "### Recommended Actions"
+            echo "1. ✅ Fix failing tests"
+            echo "2. 🔒 Address security vulnerabilities"
+            echo "3. 📝 Review code changes"
+            echo "4. 🧪 Increase test coverage"
           } >> $GITHUB_STEP_SUMMARY
-          echo "::error::🚫 Deployment BLOCKED - Health score: $HEALTH_SCORE, Status: $STATUS"
+          echo "::error::🚫 Deployment BLOCKED - Health: $HEALTH_SCORE, Status: $STATUS"
           exit 1
         else
           {
-            echo "✅ **Deployment APPROVED by ML Quality Gate**"
+            echo "## ✅ **Deployment APPROVED**"
             echo ""
-            echo "Health score $HEALTH_SCORE meets deployment criteria."
+            echo "All quality checks passed. Safe to deploy!"
           } >> $GITHUB_STEP_SUMMARY
         fi
     
