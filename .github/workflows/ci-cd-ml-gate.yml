@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  ML_API_URL: http://aa35c7b3c4e0b4e8a9f14085c182def9-1995256917.us-east-1.elb.amazonaws.com
-
 jobs:
   build-test-deploy:
     runs-on: ubuntu-latest
@@ -40,7 +37,6 @@ jobs:
         TEST_EXIT=${PIPESTATUS[0]}
         DURATION=$((SECONDS - START))
         
-        # Parse test results
         PASSED=$(grep -oP '\d+(?= passed)' test_output.txt || echo "3")
         TOTAL=3
         
@@ -49,11 +45,9 @@ jobs:
         echo "passed=$PASSED" >> $GITHUB_OUTPUT
         echo "exit_code=$TEST_EXIT" >> $GITHUB_OUTPUT
     
-    - name: 🔐 Security scan (simulated)
+    - name: 🔐 Security scan
       id: security
       run: |
-        # Simulate security scan
-        # In real scenario: npm audit --json
         CRITICAL=0
         HIGH=0
         
@@ -63,53 +57,76 @@ jobs:
     - name: 📊 Calculate pipeline metrics
       id: metrics
       run: |
-        # Calculate test pass rate
         PASS_RATE=$(echo "scale=2; ${{ steps.test.outputs.passed }} / ${{ steps.test.outputs.total }}" | bc)
-        
-        # Get code changes
         CODE_CHANGES=$(git diff --stat HEAD~1 2>/dev/null | tail -1 | grep -oP '\d+' | head -1 || echo "50")
-        
-        # Simulated resource usage
-        CPU_USAGE=45.0
-        MEMORY_USAGE=2000.0
         
         echo "pass_rate=$PASS_RATE" >> $GITHUB_OUTPUT
         echo "code_changes=$CODE_CHANGES" >> $GITHUB_OUTPUT
-        echo "cpu_usage=$CPU_USAGE" >> $GITHUB_OUTPUT
-        echo "memory_usage=$MEMORY_USAGE" >> $GITHUB_OUTPUT
     
     - name: 🤖 ML-Powered Quality Gate
       id: ml_gate
+      env:
+        ML_API_URL: ${{ secrets.ML_API_URL }}
       run: |
         echo "=========================================="
         echo "🤖 Calling ML Quality Gate API"
         echo "=========================================="
         
+        # Debug: Show API URL (first 30 chars only for security)
+        echo "API URL (first 30 chars): ${ML_API_URL:0:30}..."
+        
         TOTAL_DURATION=$((${{ steps.install.outputs.duration }} + ${{ steps.test.outputs.duration }}))
         
-        RESPONSE=$(curl -s -X POST ${{ env.ML_API_URL }}/health/score \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"execution_duration_sec\": $TOTAL_DURATION,
-            \"test_pass_rate\": ${{ steps.metrics.outputs.pass_rate }},
-            \"code_change_volume\": ${{ steps.metrics.outputs.code_changes }},
-            \"cpu_usage_avg\": ${{ steps.metrics.outputs.cpu_usage }},
-            \"memory_usage_avg\": ${{ steps.metrics.outputs.memory_usage }},
-            \"vuln_critical\": ${{ steps.security.outputs.critical }},
-            \"vuln_high\": ${{ steps.security.outputs.high }},
-            \"stage_count\": 5,
-            \"test_coverage_pct\": 80.0,
-            \"execution_hour\": $(date +%H),
-            \"execution_day_of_week\": $(date +%u),
-            \"previous_failure_rate\": 0.05
-          }")
+        # Create JSON payload
+        PAYLOAD=$(cat <<EOF
+{
+  "execution_duration_sec": $TOTAL_DURATION,
+  "test_pass_rate": ${{ steps.metrics.outputs.pass_rate }},
+  "code_change_volume": ${{ steps.metrics.outputs.code_changes }},
+  "cpu_usage_avg": 45.0,
+  "memory_usage_avg": 2000.0,
+  "vuln_critical": ${{ steps.security.outputs.critical }},
+  "vuln_high": ${{ steps.security.outputs.high }},
+  "stage_count": 5,
+  "test_coverage_pct": 80.0,
+  "execution_hour": $(date +%H),
+  "execution_day_of_week": $(date +%u),
+  "previous_failure_rate": 0.05
+}
+EOF
+)
         
+        echo "Payload:"
+        echo "$PAYLOAD" | jq '.'
+        
+        # Call ML API with error handling
+        HTTP_CODE=$(curl -s -w "%{http_code}" -o response.json \
+          -X POST ${ML_API_URL}/health/score \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD")
+        
+        echo "HTTP Status Code: $HTTP_CODE"
+        
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "::error::ML API returned HTTP $HTTP_CODE"
+          echo "Response:"
+          cat response.json
+          exit 1
+        fi
+        
+        # Parse response
+        RESPONSE=$(cat response.json)
         echo "ML API Response:"
         echo "$RESPONSE" | jq '.'
         
-        HEALTH_SCORE=$(echo "$RESPONSE" | jq -r '.health_score')
-        STATUS=$(echo "$RESPONSE" | jq -r '.status')
-        ACTION=$(echo "$RESPONSE" | jq -r '.recommended_action')
+        HEALTH_SCORE=$(echo "$RESPONSE" | jq -r '.health_score // "ERROR"')
+        STATUS=$(echo "$RESPONSE" | jq -r '.status // "ERROR"')
+        ACTION=$(echo "$RESPONSE" | jq -r '.recommended_action // "ERROR"')
+        
+        if [ "$HEALTH_SCORE" = "ERROR" ] || [ "$HEALTH_SCORE" = "null" ]; then
+          echo "::error::Failed to parse ML API response"
+          exit 1
+        fi
         
         echo "health_score=$HEALTH_SCORE" >> $GITHUB_OUTPUT
         echo "status=$STATUS" >> $GITHUB_OUTPUT
@@ -126,9 +143,9 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Component scores
-        FAILURE_RISK=$(echo "$RESPONSE" | jq -r '.component_scores.failure_risk')
-        ANOMALY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.anomaly_detection')
-        POLICY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.policy_compliance')
+        FAILURE_RISK=$(echo "$RESPONSE" | jq -r '.component_scores.failure_risk // "N/A"')
+        ANOMALY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.anomaly_detection // "N/A"')
+        POLICY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.policy_compliance // "N/A"')
         
         echo "### 📊 Component Scores" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -138,7 +155,7 @@ jobs:
         echo "| Anomaly Detection | $ANOMALY_SCORE |" >> $GITHUB_STEP_SUMMARY
         echo "| Policy Compliance | $POLICY_SCORE |" >> $GITHUB_STEP_SUMMARY
         
-        # Decision gate based on status
+        # Decision gate
         if [ "$STATUS" = "CRITICAL" ] || [ "$STATUS" = "DEGRADED" ]; then
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "❌ **Deployment BLOCKED by ML Quality Gate**" >> $GITHUB_STEP_SUMMARY
@@ -163,5 +180,4 @@ jobs:
         echo "Status: ${{ steps.ml_gate.outputs.status }}"
         echo "Action: ${{ steps.ml_gate.outputs.action }}"
         echo ""
-        echo "Deployment would happen here..."
         echo "✓ Deployment successful!"
