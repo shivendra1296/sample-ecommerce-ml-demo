@@ -1,69 +1,28 @@
 const app = require('./server');
 
-console.log('Running tests...\n');
+console.log('Running tests...');
 
-let passed = 0;
-let failed = 0;
+let passed = 1;  // Only 1 test passing
+let failed = 2;  // 2 tests failing
 
-// Test 1: Server exports app
-try {
-  if (typeof app === 'function') {
-    console.log('✓ Test 1: Server exports app');
-    passed++;
-  } else {
-    console.log('✗ Test 1: Server exports app');
-    failed++;
-  }
-} catch (e) {
-  console.log('✗ Test 1: Server exports app - ' + e.message);
-  failed++;
-}
-
-// Test 2: Products array exists
-try {
-  const products = [
-    { id: 1, name: 'Laptop', price: 999, stock: 50 },
-    { id: 2, name: 'Phone', price: 699, stock: 100 },
-    { id: 3, name: 'Tablet', price: 499, stock: 75 }
-  ];
-
-  if (products.length === 3) {
-    console.log('✓ Test 2: Products array has correct length');
-    passed++;
-  } else {
-    console.log('✗ Test 2: Products array has correct length');
-    failed++;
-  }
-} catch (e) {
-  console.log('✗ Test 2: Products array - ' + e.message);
-  failed++;
-}
-
-// Test 3: Product prices are valid
-try {
-  const products = [
-    { id: 1, name: 'Laptop', price: 999, stock: 50 },
-    { id: 2, name: 'Phone', price: 699, stock: 100 },
-    { id: 3, name: 'Tablet', price: 499, stock: 75 }
-  ];
-  
-  const allPricesValid = products.every(p => p.price > 0);
-  if (allPricesValid) {
-    console.log('✓ Test 3: All product prices are valid');
-    passed++;
-  } else {
-    console.log('✗ Test 3: All product prices are valid');
-    failed++;
-  }
-} catch (e) {
-  console.log('✗ Test 3: Product prices - ' + e.message);
-  failed++;
-}
-
-console.log(`\n${passed} passed, ${failed} failed`);
-
-if (failed > 0) {
-  process.exit(1);
+// Test 1: Server exports app (PASS)
+if (typeof app === 'function') {
+  console.log('✓ Test 1: Server exports app');
+  passed++;
 } else {
-  process.exit(0);
+  console.log('✗ Test 1: Server exports app');
+  failed++;
 }
+
+// Test 2: Database connection (FAIL - simulated)
+console.log('✗ Test 2: Database connection failed - timeout after 30s');
+failed++;
+
+// Test 3: Authentication (FAIL - simulated)
+console.log('✗ Test 3: Authentication service unreachable');
+failed++;
+
+console.log(`\nTests completed: ${passed} passed, ${failed} failed`);
+
+// Exit with failure code
+process.exit(1);

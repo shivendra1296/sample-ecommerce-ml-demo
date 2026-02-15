@@ -59,3 +59,57 @@ if (require.main === module) {
 
 module.exports = app;
 // v1.0.1 - Minor update
+
+// ========================================
+// NEW CODE - Major refactoring
+// ========================================
+
+// New authentication middleware (buggy)
+function authenticate(req, res, next) {
+  // TODO: Implement proper authentication
+  // SECURITY RISK: No actual auth check!
+  next();
+}
+
+// New database connection (not implemented)
+function connectDatabase() {
+  // TODO: Connect to database
+  throw new Error('Database not configured');
+}
+
+// New payment processing (incomplete)
+app.post('/payments', authenticate, (req, res) => {
+  const { amount, cardNumber } = req.body;
+  
+  // SECURITY RISK: Storing card numbers in plain text!
+  console.log('Processing payment:', cardNumber);
+  
+  res.json({ 
+    status: 'pending',
+    // BUG: Missing error handling
+    amount: amount
+  });
+});
+
+// New admin endpoint (no authorization!)
+app.delete('/admin/users/:id', (req, res) => {
+  // SECURITY RISK: No admin check!
+  res.json({ message: 'User deleted' });
+});
+
+// Lots more new code...
+for (let i = 0; i < 50; i++) {
+  // Dummy code to increase change volume
+  const dummyFunction = () => {
+    return `function_${i}`;
+  };
+}
+
+// More buggy code
+app.get('/debug', (req, res) => {
+  // SECURITY RISK: Exposing sensitive info
+  res.json({
+    env: process.env,
+    config: 'secret_api_keys_here'
+  });
+});
