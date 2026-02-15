@@ -72,59 +72,40 @@ jobs:
         echo "🤖 Calling ML Quality Gate API"
         echo "=========================================="
         
-        # Debug: Show API URL (first 30 chars only for security)
-        echo "API URL (first 30 chars): ${ML_API_URL:0:30}..."
+        echo "API URL configured: ${ML_API_URL:0:30}..."
         
         TOTAL_DURATION=$((${{ steps.install.outputs.duration }} + ${{ steps.test.outputs.duration }}))
         
-        # Create JSON payload
-        PAYLOAD=$(cat <<EOF
-{
-  "execution_duration_sec": $TOTAL_DURATION,
-  "test_pass_rate": ${{ steps.metrics.outputs.pass_rate }},
-  "code_change_volume": ${{ steps.metrics.outputs.code_changes }},
-  "cpu_usage_avg": 45.0,
-  "memory_usage_avg": 2000.0,
-  "vuln_critical": ${{ steps.security.outputs.critical }},
-  "vuln_high": ${{ steps.security.outputs.high }},
-  "stage_count": 5,
-  "test_coverage_pct": 80.0,
-  "execution_hour": $(date +%H),
-  "execution_day_of_week": $(date +%u),
-  "previous_failure_rate": 0.05
-}
-EOF
-)
-        
-        echo "Payload:"
-        echo "$PAYLOAD" | jq '.'
-        
-        # Call ML API with error handling
-        HTTP_CODE=$(curl -s -w "%{http_code}" -o response.json \
-          -X POST ${ML_API_URL}/health/score \
+        # Call ML API
+        RESPONSE=$(curl -s -X POST ${ML_API_URL}/health/score \
           -H "Content-Type: application/json" \
-          -d "$PAYLOAD")
+          -d "{
+            \"execution_duration_sec\": $TOTAL_DURATION,
+            \"test_pass_rate\": ${{ steps.metrics.outputs.pass_rate }},
+            \"code_change_volume\": ${{ steps.metrics.outputs.code_changes }},
+            \"cpu_usage_avg\": 45.0,
+            \"memory_usage_avg\": 2000.0,
+            \"vuln_critical\": ${{ steps.security.outputs.critical }},
+            \"vuln_high\": ${{ steps.security.outputs.high }},
+            \"stage_count\": 5,
+            \"test_coverage_pct\": 80.0,
+            \"execution_hour\": $(date +%H),
+            \"execution_day_of_week\": $(date +%u),
+            \"previous_failure_rate\": 0.05
+          }")
         
-        echo "HTTP Status Code: $HTTP_CODE"
-        
-        if [ "$HTTP_CODE" != "200" ]; then
-          echo "::error::ML API returned HTTP $HTTP_CODE"
-          echo "Response:"
-          cat response.json
-          exit 1
-        fi
-        
-        # Parse response
-        RESPONSE=$(cat response.json)
         echo "ML API Response:"
-        echo "$RESPONSE" | jq '.'
+        echo "$RESPONSE" | jq '.' || echo "$RESPONSE"
         
-        HEALTH_SCORE=$(echo "$RESPONSE" | jq -r '.health_score // "ERROR"')
-        STATUS=$(echo "$RESPONSE" | jq -r '.status // "ERROR"')
-        ACTION=$(echo "$RESPONSE" | jq -r '.recommended_action // "ERROR"')
+        # Parse response with defaults
+        HEALTH_SCORE=$(echo "$RESPONSE" | jq -r '.health_score // empty')
+        STATUS=$(echo "$RESPONSE" | jq -r '.status // empty')
+        ACTION=$(echo "$RESPONSE" | jq -r '.recommended_action // empty')
         
-        if [ "$HEALTH_SCORE" = "ERROR" ] || [ "$HEALTH_SCORE" = "null" ]; then
-          echo "::error::Failed to parse ML API response"
+        # Check if we got valid response
+        if [ -z "$HEALTH_SCORE" ]; then
+          echo "::error::Failed to get valid response from ML API"
+          echo "Raw response: $RESPONSE"
           exit 1
         fi
         
@@ -133,41 +114,48 @@ EOF
         echo "action=$ACTION" >> $GITHUB_OUTPUT
         
         # Add to job summary
-        echo "### 🤖 ML Quality Gate Results" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Health Score** | $HEALTH_SCORE/100 |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Status** | $STATUS |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Recommendation** | $ACTION |" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
+        {
+          echo "### 🤖 ML Quality Gate Results"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| **Health Score** | $HEALTH_SCORE/100 |"
+          echo "| **Status** | $STATUS |"
+          echo "| **Recommendation** | $ACTION |"
+          echo ""
+        } >> $GITHUB_STEP_SUMMARY
         
         # Component scores
-        FAILURE_RISK=$(echo "$RESPONSE" | jq -r '.component_scores.failure_risk // "N/A"')
-        ANOMALY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.anomaly_detection // "N/A"')
-        POLICY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.policy_compliance // "N/A"')
+        FAILURE_RISK=$(echo "$RESPONSE" | jq -r '.component_scores.failure_risk // empty')
+        ANOMALY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.anomaly_detection // empty')
+        POLICY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.policy_compliance // empty')
         
-        echo "### 📊 Component Scores" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Component | Score |" >> $GITHUB_STEP_SUMMARY
-        echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| Failure Risk | $FAILURE_RISK |" >> $GITHUB_STEP_SUMMARY
-        echo "| Anomaly Detection | $ANOMALY_SCORE |" >> $GITHUB_STEP_SUMMARY
-        echo "| Policy Compliance | $POLICY_SCORE |" >> $GITHUB_STEP_SUMMARY
+        {
+          echo "### 📊 Component Scores"
+          echo ""
+          echo "| Component | Score |"
+          echo "|-----------|-------|"
+          echo "| Failure Risk | $FAILURE_RISK |"
+          echo "| Anomaly Detection | $ANOMALY_SCORE |"
+          echo "| Policy Compliance | $POLICY_SCORE |"
+          echo ""
+        } >> $GITHUB_STEP_SUMMARY
         
         # Decision gate
         if [ "$STATUS" = "CRITICAL" ] || [ "$STATUS" = "DEGRADED" ]; then
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "❌ **Deployment BLOCKED by ML Quality Gate**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Health score $HEALTH_SCORE is below acceptable threshold." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "❌ **Deployment BLOCKED by ML Quality Gate**"
+            echo ""
+            echo "Health score $HEALTH_SCORE is below acceptable threshold."
+          } >> $GITHUB_STEP_SUMMARY
           echo "::error::Deployment blocked - Health score: $HEALTH_SCORE, Status: $STATUS"
           exit 1
         else
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **Deployment APPROVED by ML Quality Gate**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Health score $HEALTH_SCORE meets deployment criteria." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "✅ **Deployment APPROVED by ML Quality Gate**"
+            echo ""
+            echo "Health score $HEALTH_SCORE meets deployment criteria."
+          } >> $GITHUB_STEP_SUMMARY
         fi
     
     - name: 🚀 Deploy to Production
