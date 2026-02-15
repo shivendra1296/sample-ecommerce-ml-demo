@@ -50,7 +50,6 @@ jobs:
         echo "duration=$DURATION" >> $GITHUB_OUTPUT
         echo "total=$TOTAL" >> $GITHUB_OUTPUT
         echo "passed=$PASSED" >> $GITHUB_OUTPUT
-        echo "exit_code=$TEST_EXIT" >> $GITHUB_OUTPUT
     
     - name: 🔐 Security scan
       id: security
@@ -58,7 +57,6 @@ jobs:
         if [[ "${{ github.ref }}" == *"risky-deployment"* ]]; then
           CRITICAL=2
           HIGH=5
-          echo "⚠️ Security issues detected!"
         else
           CRITICAL=0
           HIGH=0
@@ -67,14 +65,13 @@ jobs:
         echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
         echo "high=$HIGH" >> $GITHUB_OUTPUT
     
-    - name: 📊 Calculate pipeline metrics
+    - name: 📊 Calculate metrics
       id: metrics
       run: |
         TOTAL=${{ steps.test.outputs.total }}
         PASSED=${{ steps.test.outputs.passed }}
         
         if [ "$TOTAL" -gt 0 ]; then
-          # Use awk to ensure proper decimal format (0.33 not .33)
           PASS_RATE=$(awk "BEGIN {printf \"%.2f\", $PASSED / $TOTAL}")
         else
           PASS_RATE="0.33"
@@ -89,13 +86,13 @@ jobs:
         echo "pass_rate=$PASS_RATE" >> $GITHUB_OUTPUT
         echo "code_changes=$CODE_CHANGES" >> $GITHUB_OUTPUT
     
-    - name: 🤖 ML-Powered Quality Gate
+    - name: 🤖 ML Quality Gate
       id: ml_gate
       env:
         ML_API_URL: ${{ secrets.ML_API_URL }}
       run: |
         echo "=========================================="
-        echo "🤖 Calling ML Quality Gate API"
+        echo "🤖 ML Quality Gate"
         echo "=========================================="
         
         TOTAL_DURATION=$((${{ steps.install.outputs.duration }} + ${{ steps.test.outputs.duration }}))
@@ -124,41 +121,13 @@ jobs:
         VULN_CRIT=${{ steps.security.outputs.critical }}
         VULN_HIGH=${{ steps.security.outputs.high }}
         
-        echo "Pipeline Metrics:"
-        echo "- Duration: $TOTAL_DURATION seconds"
-        echo "- Test Pass Rate: $PASS_RATE"
-        echo "- Code Changes: $CODE_CHANGES lines"
-        echo "- Critical Vulns: $VULN_CRIT"
-        echo "- High Vulns: $VULN_HIGH"
-        
-        # Create JSON file to avoid shell escaping issues
-        cat > payload.json <<EOF
-{
-  "execution_duration_sec": $TOTAL_DURATION,
-  "test_pass_rate": $PASS_RATE,
-  "code_change_volume": $CODE_CHANGES,
-  "cpu_usage_avg": $CPU_USAGE,
-  "memory_usage_avg": $MEMORY_USAGE,
-  "vuln_critical": $VULN_CRIT,
-  "vuln_high": $VULN_HIGH,
-  "stage_count": $STAGE_COUNT,
-  "test_coverage_pct": $COVERAGE,
-  "execution_hour": $EXEC_HOUR,
-  "execution_day_of_week": $EXEC_DAY,
-  "previous_failure_rate": $PREV_FAILURE
-}
-EOF
-        
-        echo ""
-        echo "Request Payload:"
-        cat payload.json | jq '.'
+        echo "Metrics: duration=$TOTAL_DURATION, pass_rate=$PASS_RATE, changes=$CODE_CHANGES"
         
         RESPONSE=$(curl -s -X POST ${ML_API_URL}/health/score \
           -H "Content-Type: application/json" \
-          -d @payload.json)
+          -d '{"execution_duration_sec":'$TOTAL_DURATION',"test_pass_rate":'$PASS_RATE',"code_change_volume":'$CODE_CHANGES',"cpu_usage_avg":'$CPU_USAGE',"memory_usage_avg":'$MEMORY_USAGE',"vuln_critical":'$VULN_CRIT',"vuln_high":'$VULN_HIGH',"stage_count":'$STAGE_COUNT',"test_coverage_pct":'$COVERAGE',"execution_hour":'$EXEC_HOUR',"execution_day_of_week":'$EXEC_DAY',"previous_failure_rate":'$PREV_FAILURE'}')
         
-        echo ""
-        echo "ML API Response:"
+        echo "Response:"
         echo "$RESPONSE" | jq '.'
         
         HEALTH_SCORE=$(echo "$RESPONSE" | jq -r '.health_score // empty')
@@ -166,83 +135,49 @@ EOF
         ACTION=$(echo "$RESPONSE" | jq -r '.recommended_action // empty')
         
         if [ -z "$HEALTH_SCORE" ]; then
-          echo "::error::Failed to get valid response from ML API"
-          echo "Raw response: $RESPONSE"
+          echo "::error::ML API failed"
           exit 1
         fi
         
         echo "health_score=$HEALTH_SCORE" >> $GITHUB_OUTPUT
         echo "status=$STATUS" >> $GITHUB_OUTPUT
-        echo "action=$ACTION" >> $GITHUB_OUTPUT
+        
+        FAILURE_RISK=$(echo "$RESPONSE" | jq -r '.component_scores.failure_risk')
+        ANOMALY=$(echo "$RESPONSE" | jq -r '.component_scores.anomaly_detection')
+        POLICY=$(echo "$RESPONSE" | jq -r '.component_scores.policy_compliance')
         
         {
-          echo "### 🤖 ML Quality Gate Results"
-          echo ""
+          echo "### 🤖 ML Quality Gate"
           echo "| Metric | Value |"
           echo "|--------|-------|"
-          echo "| **Health Score** | **$HEALTH_SCORE/100** |"
-          echo "| **Status** | **$STATUS** |"
-          echo "| **Recommendation** | $ACTION |"
+          echo "| Health Score | **$HEALTH_SCORE/100** |"
+          echo "| Status | **$STATUS** |"
+          echo "| Recommendation | $ACTION |"
           echo ""
-        } >> $GITHUB_STEP_SUMMARY
-        
-        FAILURE_RISK=$(echo "$RESPONSE" | jq -r '.component_scores.failure_risk // empty')
-        ANOMALY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.anomaly_detection // empty')
-        POLICY_SCORE=$(echo "$RESPONSE" | jq -r '.component_scores.policy_compliance // empty')
-        
-        {
-          echo "### 📊 Component Scores"
-          echo ""
+          echo "### 📊 Components"
           echo "| Component | Score |"
           echo "|-----------|-------|"
           echo "| Failure Risk | $FAILURE_RISK |"
-          echo "| Anomaly Detection | $ANOMALY_SCORE |"
-          echo "| Policy Compliance | $POLICY_SCORE |"
-          echo ""
+          echo "| Anomaly Detection | $ANOMALY |"
+          echo "| Policy Compliance | $POLICY |"
         } >> $GITHUB_STEP_SUMMARY
-        
-        if [[ "${{ github.ref }}" == *"risky-deployment"* ]]; then
-          {
-            echo "### ⚠️ Issues Detected"
-            echo ""
-            echo "- ❌ **Tests failing**: ${{ steps.test.outputs.passed }}/${{ steps.test.outputs.total }} passed"
-            echo "- ❌ **Critical vulnerabilities**: $VULN_CRIT"
-            echo "- ❌ **High vulnerabilities**: $VULN_HIGH"
-            echo "- ❌ **Large code changes**: $CODE_CHANGES lines"
-            echo ""
-          } >> $GITHUB_STEP_SUMMARY
-        fi
         
         if [ "$STATUS" = "CRITICAL" ] || [ "$STATUS" = "DEGRADED" ]; then
           {
-            echo "## ❌ **DEPLOYMENT BLOCKED BY ML QUALITY GATE**"
             echo ""
-            echo "The ML model determined this deployment is too risky."
-            echo ""
-            echo "**Health Score**: $HEALTH_SCORE/100 (threshold: 50)"
-            echo "**Failure Risk**: $(echo "100 - $FAILURE_RISK" | bc)% probability of failure"
-            echo ""
-            echo "### Recommended Actions"
-            echo "1. ✅ Fix failing tests"
-            echo "2. 🔒 Address security vulnerabilities"
-            echo "3. 📝 Review code changes"
-            echo "4. 🧪 Increase test coverage"
+            echo "## ❌ DEPLOYMENT BLOCKED"
+            echo "Health: $HEALTH_SCORE/100 (need >50)"
           } >> $GITHUB_STEP_SUMMARY
-          echo "::error::🚫 Deployment BLOCKED - Health: $HEALTH_SCORE, Status: $STATUS"
+          echo "::error::Blocked: $HEALTH_SCORE"
           exit 1
         else
           {
-            echo "## ✅ **Deployment APPROVED**"
             echo ""
-            echo "All quality checks passed. Safe to deploy!"
+            echo "## ✅ DEPLOYMENT APPROVED"
           } >> $GITHUB_STEP_SUMMARY
         fi
     
-    - name: 🚀 Deploy to Production
+    - name: 🚀 Deploy
       if: success()
       run: |
-        echo "=========================================="
-        echo "🚀 Deploying to Production"
-        echo "=========================================="
-        echo "Health Score: ${{ steps.ml_gate.outputs.health_score }}"
-        echo "✓ Deployment successful!"
+        echo "🚀 Deploying (Health: ${{ steps.ml_gate.outputs.health_score }})"
