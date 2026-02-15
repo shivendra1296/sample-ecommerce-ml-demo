@@ -76,6 +76,9 @@ jobs:
         
         TOTAL_DURATION=$((${{ steps.install.outputs.duration }} + ${{ steps.test.outputs.duration }}))
         
+        # Fix day of week: date +%w returns 0-6 (Sunday=0)
+        DAY_OF_WEEK=$(date +%w)
+        
         # Call ML API
         RESPONSE=$(curl -s -X POST ${ML_API_URL}/health/score \
           -H "Content-Type: application/json" \
@@ -90,7 +93,7 @@ jobs:
             \"stage_count\": 5,
             \"test_coverage_pct\": 80.0,
             \"execution_hour\": $(date +%H),
-            \"execution_day_of_week\": $(date +%u),
+            \"execution_day_of_week\": $DAY_OF_WEEK,
             \"previous_failure_rate\": 0.05
           }")
         
