@@ -59,3 +59,12 @@ if (require.main === module) {
 
 module.exports = app;
 // v1.0.1 - Minor update
+
+// Health check endpoint improvement
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
