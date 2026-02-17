@@ -113,3 +113,9 @@ app.get('/debug', (req, res) => {
     config: 'secret_api_keys_here'
   });
 });
+
+// Bug fix: Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
