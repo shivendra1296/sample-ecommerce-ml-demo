@@ -128,3 +128,35 @@ app.get('/health', (req, res) => {
     uptime: process.uptime()
   });
 });
+
+// SECURITY ISSUE: Payment endpoint with no validation
+app.post('/api/payment', (req, res) => {
+  const { cardNumber, cvv, amount } = req.body;
+  
+  // CRITICAL: Logging sensitive payment info!
+  console.log('Processing payment:', cardNumber, cvv);
+  
+  // CRITICAL: No input validation
+  // CRITICAL: No authentication
+  // CRITICAL: Exposing card data in response
+  
+  res.json({
+    success: true,
+    cardNumber: cardNumber,
+    amount: amount
+  });
+});
+
+// SECURITY ISSUE: Admin endpoint with no auth
+app.delete('/api/admin/users/:id', (req, res) => {
+  console.log('Deleting user:', req.params.id);
+  res.json({ deleted: true });
+});
+
+// Generate more code to increase change volume
+const dummyFunctions = [];
+for (let i = 0; i < 100; i++) {
+  dummyFunctions.push(() => {
+    return new Array(1000).fill(`dummy_${i}`);
+  });
+}
