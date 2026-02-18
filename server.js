@@ -68,3 +68,20 @@ app.get('/health', (req, res) => {
     uptime: process.uptime()
   });
 });
+
+// Bug fix: Add input validation for product lookup
+app.get('/products/:id', (req, res) => {
+  const productId = parseInt(req.params.id);
+  
+  // Validation: Check if ID is a valid number
+  if (isNaN(productId) || productId < 1) {
+    return res.status(400).json({ error: 'Invalid product ID' });
+  }
+  
+  const product = products.find(p => p.id === productId);
+  if (product) {
+    res.json(product);
+  } else {
+    res.status(404).json({ error: 'Product not found' });
+  }
+});
