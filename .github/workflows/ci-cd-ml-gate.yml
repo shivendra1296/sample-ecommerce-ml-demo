@@ -123,31 +123,31 @@ jobs:
         
         echo "Metrics: duration=$TOTAL_DURATION, pass=$PASS_RATE, changes=$CHANGES"
         
-        # Build JSON properly
-        JSON_PAYLOAD=$(cat <<EOF
-        {
-          "execution_duration_sec": $TOTAL_DURATION,
-          "test_pass_rate": $PASS_RATE,
-          "code_change_volume": $CHANGES,
-          "cpu_usage_avg": $CPU,
-          "memory_usage_avg": $MEM,
-          "vuln_critical": $CRIT,
-          "vuln_high": $HIGH,
-          "stage_count": $STAGES,
-          "test_coverage_pct": $COV,
-          "execution_hour": $HOUR,
-          "execution_day_of_week": $DAY,
-          "previous_failure_rate": $PREV
-        }
-        EOF
-        )
+        # Create JSON file to avoid shell escaping issues
+        cat > payload.json <<EOFPAYLOAD
+{
+  "execution_duration_sec": $TOTAL_DURATION,
+  "test_pass_rate": $PASS_RATE,
+  "code_change_volume": $CHANGES,
+  "cpu_usage_avg": $CPU,
+  "memory_usage_avg": $MEM,
+  "vuln_critical": $CRIT,
+  "vuln_high": $HIGH,
+  "stage_count": $STAGES,
+  "test_coverage_pct": $COV,
+  "execution_hour": $HOUR,
+  "execution_day_of_week": $DAY,
+  "previous_failure_rate": $PREV
+}
+EOFPAYLOAD
         
         echo "Request Payload:"
-        echo "$JSON_PAYLOAD" | jq '.'
+        cat payload.json | jq '.'
         
+        # Send with file instead of inline
         RESPONSE=$(curl -s -X POST ${ML_API_URL}/health/score \
           -H "Content-Type: application/json" \
-          -d "$JSON_PAYLOAD")
+          --data @payload.json)
         
         echo ""
         echo "Response:"
@@ -158,6 +158,7 @@ jobs:
         
         if [ -z "$HEALTH_SCORE" ]; then
           echo "::error::ML API failed"
+          echo "Raw response: $RESPONSE"
           exit 1
         fi
         
