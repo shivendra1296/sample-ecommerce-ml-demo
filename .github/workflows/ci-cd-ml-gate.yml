@@ -111,8 +111,8 @@ jobs:
           MEM=2000.0
           STAGES=5
           COV=80.0
-          HOUR=$(date +%H)
-          DAY=$(date +%w)
+          HOUR=$(date +%-H)
+          DAY=$(date +%-w)
           PREV=0.05
         fi
         
@@ -121,30 +121,34 @@ jobs:
         CRIT=${{ steps.security.outputs.critical }}
         HIGH=${{ steps.security.outputs.high }}
         
-        echo "Metrics: duration=$TOTAL_DURATION, pass=$PASS_RATE, changes=$CHANGES"
+        echo "Metrics: duration=$TOTAL_DURATION, pass=$PASS_RATE, changes=$CHANGES, hour=$HOUR, day=$DAY"
         
-        # Use Python to create valid JSON
-        python3 -c "
-        import json
-        payload = {
-          'execution_duration_sec': $TOTAL_DURATION,
-          'test_pass_rate': $PASS_RATE,
-          'code_change_volume': $CHANGES,
-          'cpu_usage_avg': $CPU,
-          'memory_usage_avg': $MEM,
-          'vuln_critical': $CRIT,
-          'vuln_high': $HIGH,
-          'stage_count': $STAGES,
-          'test_coverage_pct': $COV,
-          'execution_hour': $HOUR,
-          'execution_day_of_week': $DAY,
-          'previous_failure_rate': $PREV
-        }
-        with open('payload.json', 'w') as f:
-          json.dump(payload, f)
-        print(json.dumps(payload, indent=2))
-        "
+        # Create JSON using Python with proper escaping
+        python3 << PYEOF
+import json
+
+payload = {
+  "execution_duration_sec": int($TOTAL_DURATION),
+  "test_pass_rate": float($PASS_RATE),
+  "code_change_volume": int($CHANGES),
+  "cpu_usage_avg": float($CPU),
+  "memory_usage_avg": float($MEM),
+  "vuln_critical": int($CRIT),
+  "vuln_high": int($HIGH),
+  "stage_count": int($STAGES),
+  "test_coverage_pct": float($COV),
+  "execution_hour": int($HOUR),
+  "execution_day_of_week": int($DAY),
+  "previous_failure_rate": float($PREV)
+}
+
+with open('payload.json', 'w') as f:
+  json.dump(payload, f, indent=2)
+
+print(json.dumps(payload, indent=2))
+PYEOF
         
+        echo ""
         echo "Request Payload:"
         cat payload.json
         
