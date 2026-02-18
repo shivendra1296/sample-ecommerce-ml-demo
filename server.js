@@ -102,3 +102,82 @@ app.get('/products/:id', (req, res) => {
     res.status(404).json({ error: 'Product not found' });
   }
 });
+
+// ========================================
+// RISKY CODE - DO NOT DEPLOY
+// ========================================
+
+// SECURITY ISSUE: Payment endpoint with no validation
+app.post('/api/process-payment', (req, res) => {
+  const { cardNumber, cvv, expiryDate, amount } = req.body;
+  
+  // CRITICAL: Logging sensitive credit card information!
+  console.log('Processing payment:');
+  console.log('Card Number:', cardNumber);
+  console.log('CVV:', cvv);
+  console.log('Expiry:', expiryDate);
+  
+  // CRITICAL: No input validation
+  // CRITICAL: No authentication check
+  // CRITICAL: No encryption
+  
+  // SECURITY ISSUE: Returning sensitive data in response
+  res.json({
+    success: true,
+    cardNumber: cardNumber,  // EXPOSING CARD NUMBER!
+    amount: amount,
+    processedAt: new Date().toISOString()
+  });
+});
+
+// SECURITY ISSUE: Admin endpoint with no authorization
+app.delete('/api/admin/delete-user/:id', (req, res) => {
+  const userId = req.params.id;
+  
+  // CRITICAL: No admin check - anyone can delete users!
+  console.log('Deleting user:', userId);
+  
+  res.json({ 
+    deleted: true, 
+    userId: userId 
+  });
+});
+
+// SECURITY ISSUE: Debug endpoint exposing secrets
+app.get('/api/debug/config', (req, res) => {
+  // CRITICAL: Exposing environment variables and secrets
+  res.json({
+    environment: process.env,
+    databasePassword: 'admin123',  // HARDCODED PASSWORD!
+    apiKeys: {
+      stripe: 'sk_test_fake_key_12345',
+      aws: 'AKIAIOSFODNN7EXAMPLE'
+    }
+  });
+});
+
+// Bug: Memory leak
+const leakyArray = [];
+app.get('/api/leak', (req, res) => {
+  // Memory leak - array keeps growing
+  for (let i = 0; i < 100000; i++) {
+    leakyArray.push(new Array(1000).fill('leak'));
+  }
+  res.json({ status: 'ok' });
+});
+
+// Generate more code to increase change volume
+const dummyFunctions = [];
+for (let i = 0; i < 50; i++) {
+  dummyFunctions.push(function dummy() {
+    const data = new Array(10000).fill(`dummy_${i}`);
+    return data.length;
+  });
+}
+
+// More risky code
+app.post('/api/unsafe-eval', (req, res) => {
+  // CRITICAL: Using eval() - code injection vulnerability!
+  const result = eval(req.body.code);
+  res.json({ result });
+});
