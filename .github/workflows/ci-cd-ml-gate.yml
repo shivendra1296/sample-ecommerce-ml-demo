@@ -111,8 +111,8 @@ jobs:
           MEM=2000.0
           STAGES=5
           COV=80.0
-          HOUR=$(date +%-H)
-          DAY=$(date +%-w)
+          HOUR=$((10#$(date +%H)))
+          DAY=$(date +%w | sed 's/^0*//')
           PREV=0.05
         fi
         
@@ -123,45 +123,44 @@ jobs:
         
         echo "Metrics: duration=$TOTAL_DURATION, pass=$PASS_RATE, changes=$CHANGES, hour=$HOUR, day=$DAY"
         
-        # Create JSON using Python with proper escaping
-        python3 << PYEOF
-import json
-
-payload = {
-  "execution_duration_sec": int($TOTAL_DURATION),
-  "test_pass_rate": float($PASS_RATE),
-  "code_change_volume": int($CHANGES),
-  "cpu_usage_avg": float($CPU),
-  "memory_usage_avg": float($MEM),
-  "vuln_critical": int($CRIT),
-  "vuln_high": int($HIGH),
-  "stage_count": int($STAGES),
-  "test_coverage_pct": float($COV),
-  "execution_hour": int($HOUR),
-  "execution_day_of_week": int($DAY),
-  "previous_failure_rate": float($PREV)
-}
-
-with open('payload.json', 'w') as f:
-  json.dump(payload, f, indent=2)
-
-print(json.dumps(payload, indent=2))
-PYEOF
+        # Build JSON using jq
+        RESPONSE=$(jq -n \
+          --argjson dur "$TOTAL_DURATION" \
+          --argjson pass "$PASS_RATE" \
+          --argjson changes "$CHANGES" \
+          --argjson cpu "$CPU" \
+          --argjson mem "$MEM" \
+          --argjson crit "$CRIT" \
+          --argjson high "$HIGH" \
+          --argjson stages "$STAGES" \
+          --argjson cov "$COV" \
+          --argjson hour "$HOUR" \
+          --argjson day "$DAY" \
+          --argjson prev "$PREV" \
+          '{
+            execution_duration_sec: $dur,
+            test_pass_rate: $pass,
+            code_change_volume: $changes,
+            cpu_usage_avg: $cpu,
+            memory_usage_avg: $mem,
+            vuln_critical: $crit,
+            vuln_high: $high,
+            stage_count: $stages,
+            test_coverage_pct: $cov,
+            execution_hour: $hour,
+            execution_day_of_week: $day,
+            previous_failure_rate: $prev
+          }' | tee payload.json | \
+          curl -s -X POST ${ML_API_URL}/health/score \
+            -H "Content-Type: application/json" \
+            -d @-)
         
         echo ""
-        echo "Request Payload:"
-        cat payload.json
+        echo "ML API Response:"
+        echo "$RESPONSE" | jq '.'
         
-        RESPONSE=$(curl -s -X POST ${ML_API_URL}/health/score \
-          -H "Content-Type: application/json" \
-          -d @payload.json)
-        
-        echo ""
-        echo "Response:"
-        echo "$RESPONSE"
-        
-        HEALTH_SCORE=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('health_score', ''))")
-        STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('status', ''))")
+        HEALTH_SCORE=$(echo "$RESPONSE" | jq -r '.health_score // empty')
+        STATUS=$(echo "$RESPONSE" | jq -r '.status // empty')
         
         if [ -z "$HEALTH_SCORE" ]; then
           echo "::error::ML API failed"
@@ -171,9 +170,9 @@ PYEOF
         echo "health_score=$HEALTH_SCORE" >> $GITHUB_OUTPUT
         echo "status=$STATUS" >> $GITHUB_OUTPUT
         
-        FAILURE=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data['component_scores']['failure_risk'])")
-        ANOMALY=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data['component_scores']['anomaly_detection'])")
-        POLICY=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data['component_scores']['policy_compliance'])")
+        FAILURE=$(echo "$RESPONSE" | jq -r '.component_scores.failure_risk')
+        ANOMALY=$(echo "$RESPONSE" | jq -r '.component_scores.anomaly_detection')
+        POLICY=$(echo "$RESPONSE" | jq -r '.component_scores.policy_compliance')
         
         {
           echo "### 🤖 ML Quality Gate"
