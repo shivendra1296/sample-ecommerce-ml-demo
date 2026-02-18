@@ -123,51 +123,53 @@ jobs:
         
         echo "Metrics: duration=$TOTAL_DURATION, pass=$PASS_RATE, changes=$CHANGES"
         
-        # Create JSON file to avoid shell escaping issues
-        cat > payload.json <<EOFPAYLOAD
-{
-  "execution_duration_sec": $TOTAL_DURATION,
-  "test_pass_rate": $PASS_RATE,
-  "code_change_volume": $CHANGES,
-  "cpu_usage_avg": $CPU,
-  "memory_usage_avg": $MEM,
-  "vuln_critical": $CRIT,
-  "vuln_high": $HIGH,
-  "stage_count": $STAGES,
-  "test_coverage_pct": $COV,
-  "execution_hour": $HOUR,
-  "execution_day_of_week": $DAY,
-  "previous_failure_rate": $PREV
-}
-EOFPAYLOAD
+        # Use Python to create valid JSON
+        python3 -c "
+        import json
+        payload = {
+          'execution_duration_sec': $TOTAL_DURATION,
+          'test_pass_rate': $PASS_RATE,
+          'code_change_volume': $CHANGES,
+          'cpu_usage_avg': $CPU,
+          'memory_usage_avg': $MEM,
+          'vuln_critical': $CRIT,
+          'vuln_high': $HIGH,
+          'stage_count': $STAGES,
+          'test_coverage_pct': $COV,
+          'execution_hour': $HOUR,
+          'execution_day_of_week': $DAY,
+          'previous_failure_rate': $PREV
+        }
+        with open('payload.json', 'w') as f:
+          json.dump(payload, f)
+        print(json.dumps(payload, indent=2))
+        "
         
         echo "Request Payload:"
-        cat payload.json | jq '.'
+        cat payload.json
         
-        # Send with file instead of inline
         RESPONSE=$(curl -s -X POST ${ML_API_URL}/health/score \
           -H "Content-Type: application/json" \
-          --data @payload.json)
+          -d @payload.json)
         
         echo ""
         echo "Response:"
-        echo "$RESPONSE" | jq '.'
+        echo "$RESPONSE"
         
-        HEALTH_SCORE=$(echo "$RESPONSE" | jq -r '.health_score // empty')
-        STATUS=$(echo "$RESPONSE" | jq -r '.status // empty')
+        HEALTH_SCORE=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('health_score', ''))")
+        STATUS=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('status', ''))")
         
         if [ -z "$HEALTH_SCORE" ]; then
           echo "::error::ML API failed"
-          echo "Raw response: $RESPONSE"
           exit 1
         fi
         
         echo "health_score=$HEALTH_SCORE" >> $GITHUB_OUTPUT
         echo "status=$STATUS" >> $GITHUB_OUTPUT
         
-        FAILURE=$(echo "$RESPONSE" | jq -r '.component_scores.failure_risk')
-        ANOMALY=$(echo "$RESPONSE" | jq -r '.component_scores.anomaly_detection')
-        POLICY=$(echo "$RESPONSE" | jq -r '.component_scores.policy_compliance')
+        FAILURE=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data['component_scores']['failure_risk'])")
+        ANOMALY=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data['component_scores']['anomaly_detection'])")
+        POLICY=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data['component_scores']['policy_compliance'])")
         
         {
           echo "### 🤖 ML Quality Gate"
